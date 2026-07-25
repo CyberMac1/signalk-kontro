@@ -31,23 +31,27 @@ function mockApp() {
 }
 
 async function run() {
-// 1) schema advertises required token + cadence enum
+// 1) schema: required token + paths, cadence enum, server checkbox, no removed fields
 await check('schema shape', () => {
   const p = makePlugin(mockApp());
   const s = p.schema();
-  assert.deepStrictEqual(s.required, ['ingestToken']);
+  assert.deepStrictEqual(s.required, ['ingestToken', 'paths']);
   assert.deepStrictEqual(s.properties.cadence.enum, ['1m', '5m', '10m', '15m']);
+  assert.strictEqual(s.properties.useDefaultServer.default, true);
+  assert.ok(!('sendAllNumeric' in s.properties), 'sendAllNumeric removed');
+  assert.ok(!('statistics' in s.properties), 'statistics removed');
+  assert.ok(!('endpoint' in s.properties), 'endpoint field removed');
   assert.strictEqual(p.id, 'signalk-kontro');
 });
 
-// 2) linear averaging + min/max/last
-await check('linear aggregate', () => {
+// 2) always sends all four aggregates (avg/min/max/last)
+await check('aggregate is all four', () => {
   const p = makePlugin(mockApp());
   const { record, aggregate, buffers } = p._internals;
   record('environment.wind.speedApparent', 'n2k-1.115', 4);
   record('environment.wind.speedApparent', 'n2k-1.115', 6);
   const b = buffers.get(p._internals.seriesKey('environment.wind.speedApparent', 'n2k-1.115'));
-  const r = aggregate(b, ['avg', 'min', 'max', 'last']);
+  const r = aggregate(b);
   assert.strictEqual(r.avg, 5);
   assert.strictEqual(r.min, 4);
   assert.strictEqual(r.max, 6);
@@ -64,10 +68,20 @@ await check('circular mean for radians', () => {
   record('environment.wind.angleApparent', '', d2r(350));
   record('environment.wind.angleApparent', '', d2r(10));
   const b = buffers.get(p._internals.seriesKey('environment.wind.angleApparent', ''));
-  const r = aggregate(b, ['avg']);
+  const r = aggregate(b);
   const deg = (r.avg * 180) / Math.PI;
   // ~0° (or ~360°) — definitely not the 180° an arithmetic mean would give.
   assert.ok(deg < 1 || deg > 359, `expected ~0°, got ${deg.toFixed(2)}°`);
+});
+
+// 3b) endpoint resolution: default server vs custom
+await check('resolveEndpoint', () => {
+  const { resolveEndpoint } = makePlugin(mockApp())._internals;
+  assert.strictEqual(resolveEndpoint({}), 'https://app.kontro.ai/api/ingest');
+  assert.strictEqual(resolveEndpoint({ useDefaultServer: true, customEndpoint: 'https://x' }), 'https://app.kontro.ai/api/ingest');
+  assert.strictEqual(resolveEndpoint({ useDefaultServer: false, customEndpoint: 'https://x/api/ingest' }), 'https://x/api/ingest');
+  // off but blank custom → still the default (safe fallback)
+  assert.strictEqual(resolveEndpoint({ useDefaultServer: false }), 'https://app.kontro.ai/api/ingest');
 });
 
 // 4) non-numeric values are ignored (position object, string)
@@ -93,7 +107,7 @@ await check('flush posts payload + resets', async () => {
     return { ok: true, json: async () => ({ accepted: captured.body.readings.length }) };
   };
 
-  await flush({ endpoint: 'https://example.test/api/ingest', ingestToken: 'kni_test', statistics: ['avg', 'min', 'max', 'last'] });
+  await flush({ useDefaultServer: false, customEndpoint: 'https://example.test/api/ingest', ingestToken: 'kni_test' });
 
   assert.strictEqual(captured.url, 'https://example.test/api/ingest');
   assert.strictEqual(captured.opts.headers.Authorization, 'Bearer kni_test');
@@ -114,7 +128,7 @@ await check('flush reports rejection', async () => {
   const { record, flush } = p._internals;
   record('x', '', 1);
   global.fetch = async () => ({ ok: false, status: 422, text: async () => 'cadence_not_allowed' });
-  await flush({ endpoint: 'https://example.test', ingestToken: 'k', statistics: ['avg'] });
+  await flush({ useDefaultServer: false, customEndpoint: 'https://example.test', ingestToken: 'k' });
   assert.match(app.error, /422/);
 });
 

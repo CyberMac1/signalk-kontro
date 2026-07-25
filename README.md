@@ -21,9 +21,10 @@ Open **Server → Plugin Config → Kontro** and set:
 |-------|--------------|
 | **Connection key** | Generate it in Kontro → **Settings → Integrations → Signal K**, then paste it here. It ties this data to one of your systems. |
 | **Update cadence** | How often to send. Values are averaged across the window. `1 minute` needs a Kontro **Plus** plan; **Starter** must use 5 minutes or slower. |
-| **Send all numeric paths** | On = send every numeric self-vessel path. Off = only the paths you list below. |
-| **Paths to send** | e.g. `environment.wind.speedApparent`, `electrical.batteries.0.voltage`. Ignored when "send all" is on. |
-| **Aggregates to send** | Which of `avg` / `min` / `max` / `last` to include per window. |
+| **Paths to send** | Add each Signal K path you want to send, e.g. `environment.wind.speedApparent`, `electrical.batteries.0.voltage`. At least one is required. |
+| **Use default Kontro server** | Leave this on. Turn it off only if Kontro support asked you to enter a custom server URL. |
+
+All four aggregates (`avg` / `min` / `max` / `last`) are always sent per window.
 
 Save and enable the plugin. The plugin status line shows when data was last sent.
 
