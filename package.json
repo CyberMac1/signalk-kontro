@@ -1,0 +1,29 @@
+{
+  "name": "signalk-kontro",
+  "version": "0.1.0",
+  "description": "Send selected Signal K data (NMEA 2000 / 0183) to your Kontro dashboard, averaged at a chosen cadence.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-cloud",
+    "kontro",
+    "nmea2000",
+    "nmea0183"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Kontro",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CyberMac1/signalk-kontro.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CyberMac1/signalk-kontro/issues"
+  },
+  "homepage": "https://kontro.ai"
+}
