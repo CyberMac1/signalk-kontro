@@ -37,67 +37,98 @@ module.exports = function (app) {
     return typeof source === 'string' && /venus|victronenergy/i.test(source);
   }
 
+  // Standard Signal K top-level groups, used to enumerate paths when the server
+  // doesn't expose streambundle.getAvailablePaths().
+  const SELF_ROOTS = [
+    'navigation', 'environment', 'electrical', 'tanks', 'propulsion', 'steering',
+    'sensors', 'performance', 'design', 'communication',
+  ];
+
   /**
-   * Walk vessels.self and return Map<path, string[] sources>. A leaf is any node
-   * carrying a `value`; its sources are `$source` plus any keys under `values`
-   * (present when several devices report the same path).
+   * Sources reporting one path, via `getSelfPath(path)`.
+   *
+   * NOTE: use getSelfPath, NOT getPath('vessels.self.…'). getPath does
+   * `_.get(signalk.retrieve(), aPath)` and the full model keys vessels by URN —
+   * there is no literal `vessels.self` key, so that lookup always returns
+   * undefined. getSelfPath resolves against `signalk.self` directly.
    */
-  function pathSources() {
-    const map = new Map();
+  function sourcesForPath(path) {
     try {
-      const self = typeof app.getPath === 'function' ? app.getPath('vessels.self') : null;
-      if (!self || typeof self !== 'object') return map;
-      const walk = (node, prefix) => {
-        for (const key of Object.keys(node)) {
-          if (key.startsWith('$') || key === 'meta' || key === 'timestamp') continue;
-          const child = node[key];
+      const node = typeof app.getSelfPath === 'function' ? app.getSelfPath(path) : null;
+      if (!node || typeof node !== 'object') return [];
+      const out = [];
+      if (node.$source) out.push(node.$source);
+      if (node.values && typeof node.values === 'object') out.push(...Object.keys(node.values));
+      return out;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /** Walk the self tree from the standard roots, collecting value-carrying leaves. */
+  function pathsFromSelfTree() {
+    const out = [];
+    for (const root of SELF_ROOTS) {
+      let node = null;
+      try {
+        node = typeof app.getSelfPath === 'function' ? app.getSelfPath(root) : null;
+      } catch (_) { continue; }
+      if (!node || typeof node !== 'object') continue;
+      const walk = (n, prefix) => {
+        for (const key of Object.keys(n)) {
+          if (key.startsWith('$') || key === 'meta' || key === 'timestamp' || key === 'values') continue;
+          const child = n[key];
           if (!child || typeof child !== 'object') continue;
-          const path = prefix ? `${prefix}.${key}` : key;
-          if ('value' in child) {
-            const sources = [];
-            if (child.$source) sources.push(child.$source);
-            if (child.values && typeof child.values === 'object') sources.push(...Object.keys(child.values));
-            map.set(path, sources);
-          } else {
-            walk(child, path);
-          }
+          const path = `${prefix}.${key}`;
+          if ('value' in child) out.push(path);
+          else walk(child, path);
         }
       };
-      walk(self, '');
-    } catch (_) { /* no tree — caller treats every path as unclassified */ }
-    return map;
+      if ('value' in node) out.push(root);
+      else walk(node, root);
+    }
+    return out;
   }
 
   /**
    * Every data path the server currently sees, for the config dropdown, with
-   * Venus/Victron-sourced paths removed. `getAvailablePaths()` is the documented
-   * API; the vessels.self tree is a fallback for servers that don't expose it.
-   * Returns [] if neither works, in which case the schema falls back to free text
-   * so the user is never blocked.
+   * Venus/Victron-sourced paths removed. Returns [] when nothing can be
+   * enumerated, in which case the schema falls back to free text so the user is
+   * never blocked.
    */
   function availablePaths() {
-    const sources = pathSources();
-
-    // Drop a path only when EVERY source for it is Venus. A path also fed by a
-    // non-Victron sensor stays; a path we can't classify stays (fail open —
-    // never silently hide data).
-    const notVenus = (p) => {
-      const s = sources.get(p);
-      if (!s || s.length === 0) return true;
-      return !s.every(isVenusSource);
-    };
-
+    let candidates = [];
     try {
       const fromBundle = app.streambundle && typeof app.streambundle.getAvailablePaths === 'function'
         ? app.streambundle.getAvailablePaths()
         : null;
-      if (Array.isArray(fromBundle) && fromBundle.length) {
-        return [...new Set(fromBundle)].filter(notVenus).sort();
-      }
-    } catch (_) { /* fall through to the tree */ }
+      if (Array.isArray(fromBundle)) candidates = fromBundle;
+    } catch (_) { /* fall through */ }
+    if (!candidates.length) candidates = pathsFromSelfTree();
 
-    const fromTree = [...sources.keys()].filter(notVenus).sort();
-    return fromTree;
+    const unique = [...new Set(candidates)].filter(Boolean);
+
+    // Drop a path only when EVERY source for it is Venus. A path also fed by a
+    // non-Victron sensor stays; a path whose sources we can't read stays (fail
+    // open — never silently hide data).
+    const kept = [];
+    const dropped = [];
+    for (const p of unique) {
+      const s = sourcesForPath(p);
+      if (s.length > 0 && s.every(isVenusSource)) dropped.push(`${p} [${s.join(', ')}]`);
+      else kept.push(p);
+    }
+
+    // Visible with the plugin's Debug switch on — the fastest way to see why a
+    // path was or wasn't hidden.
+    if (typeof app.debug === 'function') {
+      app.debug(`paths: ${unique.length} found, ${dropped.length} hidden as Venus/Victron`);
+      if (dropped.length) app.debug(`hidden: ${dropped.join(' | ')}`);
+      const unknown = kept.filter((p) => sourcesForPath(p).length === 0);
+      if (unknown.length) app.debug(`no source info (kept): ${unknown.slice(0, 20).join(', ')}`);
+    }
+
+    return kept.sort();
   }
 
   // ── Config schema (Signal K renders the form from this) ────────────────────

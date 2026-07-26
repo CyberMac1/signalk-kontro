@@ -35,11 +35,21 @@ function mockApp() {
   };
 }
 
-/** A server that can't enumerate paths (no streambundle, no getPath). */
+/** A server that can't enumerate paths (no streambundle). */
 function bareApp() {
   const a = mockApp();
   delete a.streambundle;
   return a;
+}
+
+/**
+ * Mimics the server's getSelfPath: lodash-style get against the self vessel.
+ * (getPath('vessels.self.…') does NOT work — the full model keys vessels by URN.)
+ */
+function selfPathGetter(tree) {
+  return (p) => String(p).split('.').reduce(
+    (n, k) => (n && typeof n === 'object' ? n[k] : undefined), tree,
+  );
 }
 
 async function run() {
@@ -114,7 +124,7 @@ await check('subscribes with instant policy + minPeriod, never period', () => {
 // 1h) Venus/Victron paths are hidden — that data already reaches Kontro via VRM
 await check('Venus-sourced paths are excluded from the list', () => {
   const app = bareApp();
-  app.getPath = (p) => p !== 'vessels.self' ? null : {
+  app.getSelfPath = selfPathGetter({
     electrical: { batteries: { 0: {
       // Victron battery via signalk-venus-plugin → excluded
       voltage: { value: 12.8, $source: 'venus.com.victronenergy.battery.ttyO2' },
@@ -130,7 +140,7 @@ await check('Venus-sourced paths are excluded from the list', () => {
     tanks: { freshWater: { 0: {
       currentLevel: { value: 0.5, $source: 'venus.com.victronenergy.tank.ttyUSB0' },
     } } },
-  };
+  });
   const s = makePlugin(app).schema();
   assert.deepStrictEqual(s.properties.paths.items.enum, [
     'environment.wind.speedApparent',
@@ -145,12 +155,26 @@ await check('Venus filtering applies to streambundle paths too', () => {
     'electrical.batteries.0.voltage',
     'environment.wind.speedApparent',
   ];
-  app.getPath = (p) => p !== 'vessels.self' ? null : {
+  app.getSelfPath = selfPathGetter({
     electrical: { batteries: { 0: { voltage: { value: 12.8, $source: 'venus.com.victronenergy.battery' } } } },
     environment: { wind: { speedApparent: { value: 5, $source: 'n2k-1.115' } } },
-  };
+  });
   const s = makePlugin(app).schema();
   assert.deepStrictEqual(s.properties.paths.items.enum, ['environment.wind.speedApparent']);
+});
+
+// 1j) regression guard: getPath('vessels.self') always returns undefined on a real
+// server (the full model keys vessels by URN), so it must never be relied on.
+await check('does not depend on getPath("vessels.self")', () => {
+  const app = bareApp();
+  let usedGetPath = false;
+  app.getPath = () => { usedGetPath = true; return undefined; };
+  app.getSelfPath = selfPathGetter({
+    environment: { wind: { speedApparent: { value: 5, $source: 'n2k-1.115' } } },
+  });
+  const s = makePlugin(app).schema();
+  assert.deepStrictEqual(s.properties.paths.items.enum, ['environment.wind.speedApparent']);
+  assert.strictEqual(usedGetPath, false, 'getPath must not be used for discovery');
 });
 
 // 1d) …falling back to free text when the server can't enumerate paths
@@ -164,12 +188,12 @@ await check('paths falls back to free text', () => {
 // 1e) no streambundle → derive paths by walking the vessels.self tree
 await check('paths fall back to the vessels.self tree', () => {
   const app = bareApp();
-  app.getPath = (p) => p !== 'vessels.self' ? null : {
+  app.getSelfPath = selfPathGetter({
     environment: { wind: { speedApparent: { value: 5, timestamp: 'x' } } },
     electrical: { batteries: { 0: { voltage: { value: 12.8 } } } },
-    name: 'Boaty',                        // not an object → skipped
-    $source: { ignored: { value: 1 } },   // $-prefixed → skipped
-  };
+    name: 'Boaty',                        // not a standard root → skipped
+    $source: { ignored: { value: 1 } },   // not a standard root → skipped
+  });
   const s = makePlugin(app).schema();
   assert.deepStrictEqual(s.properties.paths.items.enum, [
     'electrical.batteries.0.voltage',
