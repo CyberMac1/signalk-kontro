@@ -29,7 +29,7 @@ Open **Server → Plugin Config → Kontro** and set:
 |-------|--------------|
 | **Connection key** | Generate it in Kontro → **Settings → Integrations → Signal K**, then paste it here. It ties this data to one of your systems. |
 | **Update cadence** | How often to send. Values are averaged across the window. `1 minute` needs a Kontro **Plus** plan; **Starter** must use 5 minutes or slower. |
-| **Paths to send** | Pick each path to send from the list — it shows what your Signal K server is currently receiving. At least one is required. (If the server can't list them, type them in, e.g. `environment.wind.speedApparent`.) |
+| **Paths to send** | Click **Add** for each path you want to send, then pick it from the dropdown — the list shows what your Signal K server is currently receiving. At least one is required. (If the server can't list them, type them in, e.g. `environment.wind.speedApparent`.) |
 | **Use default Kontro server** | Leave this on. Turn it off only if Kontro support asked you to use a custom server, then put their URL in **Custom Kontro server URL**. |
 
 Save and enable the plugin. The status line shows when data was last sent.

@@ -77,7 +77,23 @@ await check('paths is a dropdown of available paths', () => {
     'environment.wind.speedApparent',
     'navigation.speedOverGround',
   ], 'sorted enum of live paths');
-  assert.strictEqual(s.properties.paths.uniqueItems, true);
+  // uniqueItems + enum makes the form render a ctrl-click multi-select listbox
+  // (one stray click clears everything) — we want add-a-row-then-pick instead.
+  assert.ok(!s.properties.paths.uniqueItems, 'no uniqueItems → per-row dropdowns');
+});
+
+// 1f) duplicate path entries are only subscribed once
+await check('duplicate paths are de-duplicated on start', () => {
+  const app = mockApp();
+  const subscribed = [];
+  app.subscriptionmanager.subscribe = (sub, un) => {
+    subscribed.push(...sub.subscribe.map((x) => x.path));
+    un.push(() => {});
+  };
+  const p = makePlugin(app);
+  p.start({ ingestToken: 'k', cadence: '15m', paths: ['a.b', 'a.b', ' a.b ', 'c.d', ''] });
+  assert.deepStrictEqual(subscribed, ['a.b', 'c.d']);
+  p.stop();
 });
 
 // 1d) …falling back to free text when the server can't enumerate paths

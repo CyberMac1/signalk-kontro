@@ -89,12 +89,15 @@ module.exports = function (app) {
           description: '1 minute requires a Kontro Plus plan; Starter accounts must use 5 minutes or slower.',
         },
         paths: {
+          // NOTE: deliberately no `uniqueItems: true`. Combined with an enum that
+          // makes the form render a ctrl-click multi-select listbox, where one
+          // stray click wipes the whole selection. Without it each entry is its
+          // own row with a dropdown, added one at a time.
           type: 'array', title: 'Paths to send', default: [],
           items: pathItems,
-          uniqueItems: true,
           description: paths.length
-            ? 'Pick each path to send. Only paths your Signal K server is currently receiving are listed.'
-            : 'No live paths detected yet — type them manually, e.g. environment.wind.speedApparent.',
+            ? 'Click "Add" for each path you want to send, then choose it from the dropdown. Only paths your Signal K server is currently receiving are listed.'
+            : 'No live paths detected yet — click "Add" and type them manually, e.g. environment.wind.speedApparent.',
         },
         useDefaultServer: {
           type: 'boolean', title: 'Use default Kontro server', default: true,
@@ -205,9 +208,13 @@ module.exports = function (app) {
       app.setPluginError('Set your Kontro connection key in the plugin configuration.');
       return;
     }
-    const paths = (Array.isArray(options.paths) ? options.paths : [])
-      .map((p) => (typeof p === 'string' ? p.trim() : ''))
-      .filter(Boolean);
+    // De-duplicated: entries are added one row at a time, so the same path can
+    // be picked twice — subscribing twice would double-count every sample.
+    const paths = [...new Set(
+      (Array.isArray(options.paths) ? options.paths : [])
+        .map((p) => (typeof p === 'string' ? p.trim() : ''))
+        .filter(Boolean),
+    )];
     if (!paths.length) {
       app.setPluginError('Add at least one Signal K path to send.');
       return;
