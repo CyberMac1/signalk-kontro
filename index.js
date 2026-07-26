@@ -28,39 +28,76 @@ module.exports = function (app) {
   const metaCache = new Map();      // path -> { units, angular }
 
   /**
-   * Every data path the server currently sees, for the config dropdown.
-   * `getAvailablePaths()` is the documented API; the vessels.self tree is a
-   * fallback for servers that don't expose it. Returns [] if neither works, in
-   * which case the schema falls back to free text so the user is never blocked.
+   * True for data originating from a Venus GX / Victron device. Kontro already
+   * pulls Victron data from the VRM API, so offering it here would duplicate it
+   * (and burn the account's Signal K series allowance).
+   * signalk-venus-plugin labels its sources `venus.com.victronenergy.*`.
+   */
+  function isVenusSource(source) {
+    return typeof source === 'string' && /venus|victronenergy/i.test(source);
+  }
+
+  /**
+   * Walk vessels.self and return Map<path, string[] sources>. A leaf is any node
+   * carrying a `value`; its sources are `$source` plus any keys under `values`
+   * (present when several devices report the same path).
+   */
+  function pathSources() {
+    const map = new Map();
+    try {
+      const self = typeof app.getPath === 'function' ? app.getPath('vessels.self') : null;
+      if (!self || typeof self !== 'object') return map;
+      const walk = (node, prefix) => {
+        for (const key of Object.keys(node)) {
+          if (key.startsWith('$') || key === 'meta' || key === 'timestamp') continue;
+          const child = node[key];
+          if (!child || typeof child !== 'object') continue;
+          const path = prefix ? `${prefix}.${key}` : key;
+          if ('value' in child) {
+            const sources = [];
+            if (child.$source) sources.push(child.$source);
+            if (child.values && typeof child.values === 'object') sources.push(...Object.keys(child.values));
+            map.set(path, sources);
+          } else {
+            walk(child, path);
+          }
+        }
+      };
+      walk(self, '');
+    } catch (_) { /* no tree — caller treats every path as unclassified */ }
+    return map;
+  }
+
+  /**
+   * Every data path the server currently sees, for the config dropdown, with
+   * Venus/Victron-sourced paths removed. `getAvailablePaths()` is the documented
+   * API; the vessels.self tree is a fallback for servers that don't expose it.
+   * Returns [] if neither works, in which case the schema falls back to free text
+   * so the user is never blocked.
    */
   function availablePaths() {
+    const sources = pathSources();
+
+    // Drop a path only when EVERY source for it is Venus. A path also fed by a
+    // non-Victron sensor stays; a path we can't classify stays (fail open —
+    // never silently hide data).
+    const notVenus = (p) => {
+      const s = sources.get(p);
+      if (!s || s.length === 0) return true;
+      return !s.every(isVenusSource);
+    };
+
     try {
       const fromBundle = app.streambundle && typeof app.streambundle.getAvailablePaths === 'function'
         ? app.streambundle.getAvailablePaths()
         : null;
-      if (Array.isArray(fromBundle) && fromBundle.length) return [...new Set(fromBundle)].sort();
-    } catch (_) { /* fall through */ }
-
-    // Fallback: walk vessels.self and collect every leaf that carries a value.
-    try {
-      const self = typeof app.getPath === 'function' ? app.getPath('vessels.self') : null;
-      if (self && typeof self === 'object') {
-        const out = [];
-        const walk = (node, prefix) => {
-          for (const key of Object.keys(node)) {
-            if (key.startsWith('$') || key === 'meta' || key === 'timestamp') continue;
-            const child = node[key];
-            if (!child || typeof child !== 'object') continue;
-            const path = prefix ? `${prefix}.${key}` : key;
-            if ('value' in child) out.push(path);
-            else walk(child, path);
-          }
-        };
-        walk(self, '');
-        if (out.length) return [...new Set(out)].sort();
+      if (Array.isArray(fromBundle) && fromBundle.length) {
+        return [...new Set(fromBundle)].filter(notVenus).sort();
       }
-    } catch (_) { /* give up — free-text fallback below */ }
-    return [];
+    } catch (_) { /* fall through to the tree */ }
+
+    const fromTree = [...sources.keys()].filter(notVenus).sort();
+    return fromTree;
   }
 
   // ── Config schema (Signal K renders the form from this) ────────────────────
@@ -223,7 +260,10 @@ module.exports = function (app) {
 
     const subscription = {
       context: 'vessels.self',
-      subscribe: paths.map((p) => ({ path: p, period: 1000, policy: 'instant' })),
+      // `period` implies policy 'fixed', so sending both makes the server warn
+      // and ignore 'instant'. We want every sample (a true average over the
+      // window), throttled by minPeriod — which is the instant-policy companion.
+      subscribe: paths.map((p) => ({ path: p, policy: 'instant', minPeriod: 1000 })),
     };
 
     app.subscriptionmanager.subscribe(

@@ -42,6 +42,10 @@ Save and enable the plugin. The status line shows when data was last sent.
 - **Angles are averaged correctly.** Paths measured in radians (wind angle, heading, …) use a
   circular mean, so 350° and 10° average to ~0°, not 180°.
 - **Two sensors on the same path stay separate**, so you can chart each one individually.
+- **Victron data is left out on purpose.** Paths coming from a Venus GX (via
+  signalk-venus-plugin) aren't offered in the list, because Kontro already gets that
+  data straight from the VRM API. If a path is reported by both a Venus device *and*
+  another sensor, it still appears.
 - Your Kontro plan sets how many paths you can store per system, and how long history is kept.
 
 ## Develop

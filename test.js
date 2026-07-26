@@ -96,6 +96,63 @@ await check('duplicate paths are de-duplicated on start', () => {
   p.stop();
 });
 
+// 1g) subscription spec must not mix `period` with policy 'instant' — the server
+// warns "period assumes policy 'fixed', ignoring policy instant" and drops it.
+await check('subscribes with instant policy + minPeriod, never period', () => {
+  const app = mockApp();
+  let spec = null;
+  app.subscriptionmanager.subscribe = (sub, un) => { spec = sub; un.push(() => {}); };
+  const p = makePlugin(app);
+  p.start({ ingestToken: 'k', cadence: '5m', paths: ['a.b'] });
+  assert.strictEqual(spec.context, 'vessels.self');
+  assert.strictEqual(spec.subscribe[0].policy, 'instant');
+  assert.strictEqual(spec.subscribe[0].minPeriod, 1000);
+  assert.ok(!('period' in spec.subscribe[0]), 'no period alongside instant');
+  p.stop();
+});
+
+// 1h) Venus/Victron paths are hidden — that data already reaches Kontro via VRM
+await check('Venus-sourced paths are excluded from the list', () => {
+  const app = bareApp();
+  app.getPath = (p) => p !== 'vessels.self' ? null : {
+    electrical: { batteries: { 0: {
+      // Victron battery via signalk-venus-plugin → excluded
+      voltage: { value: 12.8, $source: 'venus.com.victronenergy.battery.ttyO2' },
+    } } },
+    environment: { wind: {
+      // genuine NMEA sensor → kept
+      speedApparent: { value: 5, $source: 'n2k-1.115' },
+    } },
+    navigation: {
+      // reported by BOTH Venus and a real sensor → kept (not exclusively Venus)
+      speedOverGround: { value: 3, $source: 'venus.com.victronenergy.gps', values: { 'n2k-1.22': {} } },
+    },
+    tanks: { freshWater: { 0: {
+      currentLevel: { value: 0.5, $source: 'venus.com.victronenergy.tank.ttyUSB0' },
+    } } },
+  };
+  const s = makePlugin(app).schema();
+  assert.deepStrictEqual(s.properties.paths.items.enum, [
+    'environment.wind.speedApparent',
+    'navigation.speedOverGround',
+  ]);
+});
+
+// 1i) Venus filtering also applies to the getAvailablePaths() list
+await check('Venus filtering applies to streambundle paths too', () => {
+  const app = mockApp();
+  app.streambundle.getAvailablePaths = () => [
+    'electrical.batteries.0.voltage',
+    'environment.wind.speedApparent',
+  ];
+  app.getPath = (p) => p !== 'vessels.self' ? null : {
+    electrical: { batteries: { 0: { voltage: { value: 12.8, $source: 'venus.com.victronenergy.battery' } } } },
+    environment: { wind: { speedApparent: { value: 5, $source: 'n2k-1.115' } } },
+  };
+  const s = makePlugin(app).schema();
+  assert.deepStrictEqual(s.properties.paths.items.enum, ['environment.wind.speedApparent']);
+});
+
 // 1d) …falling back to free text when the server can't enumerate paths
 await check('paths falls back to free text', () => {
   const s = makePlugin(bareApp()).schema();
