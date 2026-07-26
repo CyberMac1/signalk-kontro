@@ -27,7 +27,19 @@ function mockApp() {
     subscriptionmanager: {
       subscribe(_sub, unsubscribes, _err, _delta) { unsubscribes.push(() => {}); },
     },
+    streambundle: {
+      getAvailablePaths() {
+        return ['environment.wind.speedApparent', 'electrical.batteries.0.voltage', 'navigation.speedOverGround'];
+      },
+    },
   };
+}
+
+/** A server that can't enumerate paths (no streambundle, no getPath). */
+function bareApp() {
+  const a = mockApp();
+  delete a.streambundle;
+  return a;
 }
 
 async function run() {
@@ -42,6 +54,54 @@ await check('schema shape', () => {
   assert.ok(!('statistics' in s.properties), 'statistics removed');
   assert.ok(!('endpoint' in s.properties), 'endpoint field removed');
   assert.strictEqual(p.id, 'signalk-kontro');
+});
+
+// 1b) the custom server URL field is ALWAYS present (a conditional `dependencies`
+// block didn't render in the Signal K admin UI, so the field is plain and the
+// checkbox just decides whether it is used).
+await check('custom server URL field always present', () => {
+  const s = makePlugin(mockApp()).schema();
+  assert.ok(s.properties.customEndpoint, 'customEndpoint present');
+  assert.strictEqual(s.properties.customEndpoint.type, 'string');
+  assert.ok(!s.dependencies, 'no conditional dependencies block');
+  const p = makePlugin(mockApp());
+  assert.ok(p.uiSchema['ui:order'].includes('customEndpoint'), 'ordered after the checkbox');
+});
+
+// 1c) paths render as a dropdown of what the server actually sees
+await check('paths is a dropdown of available paths', () => {
+  const s = makePlugin(mockApp()).schema();
+  assert.strictEqual(s.properties.paths.type, 'array');
+  assert.deepStrictEqual(s.properties.paths.items.enum, [
+    'electrical.batteries.0.voltage',
+    'environment.wind.speedApparent',
+    'navigation.speedOverGround',
+  ], 'sorted enum of live paths');
+  assert.strictEqual(s.properties.paths.uniqueItems, true);
+});
+
+// 1d) …falling back to free text when the server can't enumerate paths
+await check('paths falls back to free text', () => {
+  const s = makePlugin(bareApp()).schema();
+  assert.strictEqual(s.properties.paths.items.type, 'string');
+  assert.ok(!s.properties.paths.items.enum, 'no enum when nothing is known');
+  assert.match(s.properties.paths.description, /type them manually/);
+});
+
+// 1e) no streambundle → derive paths by walking the vessels.self tree
+await check('paths fall back to the vessels.self tree', () => {
+  const app = bareApp();
+  app.getPath = (p) => p !== 'vessels.self' ? null : {
+    environment: { wind: { speedApparent: { value: 5, timestamp: 'x' } } },
+    electrical: { batteries: { 0: { voltage: { value: 12.8 } } } },
+    name: 'Boaty',                        // not an object → skipped
+    $source: { ignored: { value: 1 } },   // $-prefixed → skipped
+  };
+  const s = makePlugin(app).schema();
+  assert.deepStrictEqual(s.properties.paths.items.enum, [
+    'electrical.batteries.0.voltage',
+    'environment.wind.speedApparent',
+  ]);
 });
 
 // 2) always sends all four aggregates (avg/min/max/last)

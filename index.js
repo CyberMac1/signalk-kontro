@@ -27,55 +27,91 @@ module.exports = function (app) {
   let buffers = new Map();          // seriesKey -> { path, src, unit, angular, samples[], last }
   const metaCache = new Map();      // path -> { units, angular }
 
+  /**
+   * Every data path the server currently sees, for the config dropdown.
+   * `getAvailablePaths()` is the documented API; the vessels.self tree is a
+   * fallback for servers that don't expose it. Returns [] if neither works, in
+   * which case the schema falls back to free text so the user is never blocked.
+   */
+  function availablePaths() {
+    try {
+      const fromBundle = app.streambundle && typeof app.streambundle.getAvailablePaths === 'function'
+        ? app.streambundle.getAvailablePaths()
+        : null;
+      if (Array.isArray(fromBundle) && fromBundle.length) return [...new Set(fromBundle)].sort();
+    } catch (_) { /* fall through */ }
+
+    // Fallback: walk vessels.self and collect every leaf that carries a value.
+    try {
+      const self = typeof app.getPath === 'function' ? app.getPath('vessels.self') : null;
+      if (self && typeof self === 'object') {
+        const out = [];
+        const walk = (node, prefix) => {
+          for (const key of Object.keys(node)) {
+            if (key.startsWith('$') || key === 'meta' || key === 'timestamp') continue;
+            const child = node[key];
+            if (!child || typeof child !== 'object') continue;
+            const path = prefix ? `${prefix}.${key}` : key;
+            if ('value' in child) out.push(path);
+            else walk(child, path);
+          }
+        };
+        walk(self, '');
+        if (out.length) return [...new Set(out)].sort();
+      }
+    } catch (_) { /* give up — free-text fallback below */ }
+    return [];
+  }
+
   // ── Config schema (Signal K renders the form from this) ────────────────────
-  // Property order = form order. The server setting is intentionally LAST and
-  // hidden behind a checkbox so users never touch it under normal use.
-  plugin.schema = () => ({
-    type: 'object',
-    required: ['ingestToken', 'paths'],
-    properties: {
-      ingestToken: {
-        type: 'string', title: 'Connection key',
-        description: 'Generate this in Kontro → Settings → Integrations → Signal K, then paste it here.',
+  // Property order = form order. The server setting is intentionally LAST so
+  // users never touch it under normal use.
+  plugin.schema = () => {
+    const paths = availablePaths();
+    // A dropdown when we know what's available; free text when we don't (so a
+    // server that can't enumerate paths is still configurable).
+    const pathItems = paths.length
+      ? { type: 'string', enum: paths }
+      : { type: 'string' };
+
+    return {
+      type: 'object',
+      required: ['ingestToken', 'paths'],
+      properties: {
+        ingestToken: {
+          type: 'string', title: 'Connection key',
+          description: 'Generate this in Kontro → Settings → Integrations → Signal K, then paste it here.',
+        },
+        cadence: {
+          type: 'string', title: 'Update cadence', default: '5m',
+          enum: ['1m', '5m', '10m', '15m'],
+          enumNames: ['1 minute', '5 minutes', '10 minutes', '15 minutes'],
+          description: '1 minute requires a Kontro Plus plan; Starter accounts must use 5 minutes or slower.',
+        },
+        paths: {
+          type: 'array', title: 'Paths to send', default: [],
+          items: pathItems,
+          uniqueItems: true,
+          description: paths.length
+            ? 'Pick each path to send. Only paths your Signal K server is currently receiving are listed.'
+            : 'No live paths detected yet — type them manually, e.g. environment.wind.speedApparent.',
+        },
+        useDefaultServer: {
+          type: 'boolean', title: 'Use default Kontro server', default: true,
+          description: 'Leave this on. Only turn it off if Kontro support asked you to use a custom server.',
+        },
+        customEndpoint: {
+          type: 'string', title: 'Custom Kontro server URL',
+          description: 'Only used when "Use default Kontro server" is unticked. Do not change unless Kontro support gave you a URL.',
+        },
       },
-      cadence: {
-        type: 'string', title: 'Update cadence', default: '5m',
-        enum: ['1m', '5m', '10m', '15m'],
-        enumNames: ['1 minute', '5 minutes', '10 minutes', '15 minutes'],
-        description: '1 minute requires a Kontro Plus plan; Starter accounts must use 5 minutes or slower.',
-      },
-      paths: {
-        type: 'array', title: 'Paths to send', default: [],
-        items: { type: 'string' },
-        description: 'Add each Signal K path to send, e.g. environment.wind.speedApparent or electrical.batteries.0.voltage.',
-      },
-      useDefaultServer: {
-        type: 'boolean', title: 'Use default Kontro server', default: true,
-        description: 'Leave this on. Only turn it off if Kontro support asked you to use a custom server.',
-      },
-    },
-    // When "Use default Kontro server" is off, reveal a URL field.
-    dependencies: {
-      useDefaultServer: {
-        oneOf: [
-          { properties: { useDefaultServer: { enum: [true] } } },
-          {
-            properties: {
-              useDefaultServer: { enum: [false] },
-              customEndpoint: {
-                type: 'string', title: 'Custom Kontro server URL',
-                description: 'Advanced — do not change this unless Kontro support gave you a URL.',
-              },
-            },
-          },
-        ],
-      },
-    },
-  });
+    };
+  };
 
   plugin.uiSchema = {
-    'ui:order': ['ingestToken', 'cadence', 'paths', 'useDefaultServer', '*'],
+    'ui:order': ['ingestToken', 'cadence', 'paths', 'useDefaultServer', 'customEndpoint', '*'],
     ingestToken: { 'ui:widget': 'password' },
+    customEndpoint: { 'ui:placeholder': DEFAULT_ENDPOINT },
   };
 
   function resolveEndpoint(options) {

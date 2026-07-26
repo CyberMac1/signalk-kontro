@@ -11,7 +11,15 @@ require a plugin update.
 ## Install
 
 From your Signal K server admin → **Appstore**, search for **Kontro** and install, then
-restart when prompted. (Or `npm install signalk-kontro` in your server's plugin directory.)
+restart when prompted.
+
+Or from the command line, in your Signal K config directory (usually `~/.signalk`):
+
+```bash
+npm install signalk-kontro
+```
+
+Restart the Signal K server after installing.
 
 ## Configure
 
@@ -21,34 +29,20 @@ Open **Server → Plugin Config → Kontro** and set:
 |-------|--------------|
 | **Connection key** | Generate it in Kontro → **Settings → Integrations → Signal K**, then paste it here. It ties this data to one of your systems. |
 | **Update cadence** | How often to send. Values are averaged across the window. `1 minute` needs a Kontro **Plus** plan; **Starter** must use 5 minutes or slower. |
-| **Paths to send** | Add each Signal K path you want to send, e.g. `environment.wind.speedApparent`, `electrical.batteries.0.voltage`. At least one is required. |
-| **Use default Kontro server** | Leave this on. Turn it off only if Kontro support asked you to enter a custom server URL. |
+| **Paths to send** | Pick each path to send from the list — it shows what your Signal K server is currently receiving. At least one is required. (If the server can't list them, type them in, e.g. `environment.wind.speedApparent`.) |
+| **Use default Kontro server** | Leave this on. Turn it off only if Kontro support asked you to use a custom server, then put their URL in **Custom Kontro server URL**. |
 
-All four aggregates (`avg` / `min` / `max` / `last`) are always sent per window.
+Save and enable the plugin. The status line shows when data was last sent.
 
-Save and enable the plugin. The plugin status line shows when data was last sent.
+## Good to know
 
-## What gets sent
-
-Per cadence window, for each `path` + sensor `$source` seen, one reading:
-
-```json
-{
-  "readings": [
-    { "path": "environment.wind.speedApparent", "src": "n2k-1.115",
-      "unit": "m/s", "ts": 1690000000, "avg": 5.1, "min": 4.2, "max": 6.0, "last": 5.4 }
-  ]
-}
-```
-
-Sent to your Kontro ingest endpoint with `Authorization: Bearer <connection key>`.
-
-Notes:
-- **Numeric scalar paths only** (v1). Position, attitude objects, and text paths are skipped.
-- **Angular paths** (units `rad`, e.g. wind angle, heading) are averaged with a **circular
-  mean**, so 350° and 10° average to ~0°, not 180°.
-- Multiple sensors reporting the same path are kept **separate** (by `$source`).
-- Your Kontro plan caps how many distinct series you can store per system.
+- All four aggregates — **average, minimum, maximum and last** — are sent for every path,
+  every window.
+- **Numeric values only.** Position, attitude and text paths are skipped.
+- **Angles are averaged correctly.** Paths measured in radians (wind angle, heading, …) use a
+  circular mean, so 350° and 10° average to ~0°, not 180°.
+- **Two sensors on the same path stay separate**, so you can chart each one individually.
+- Your Kontro plan sets how many paths you can store per system, and how long history is kept.
 
 ## Develop
 
@@ -56,7 +50,7 @@ Notes:
 npm test
 ```
 
-Runs a dependency-free smoke test of the aggregation + POST payload.
+Runs a dependency-free smoke test of the aggregation and send logic.
 
 ## License
 
