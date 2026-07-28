@@ -271,6 +271,10 @@ module.exports = function (app) {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   plugin.start = function (options) {
+    // Defensive: if start() is ever called without a preceding stop(), the old
+    // interval would be orphaned and keep posting — two timers means double the
+    // send rate, which the server rejects as too-fast and costs a window of data.
+    if (timer) { clearInterval(timer); timer = null; }
     options = options || {};
     if (!options.ingestToken) {
       app.setPluginError('Set your Kontro connection key in the plugin configuration.');

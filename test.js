@@ -106,6 +106,22 @@ await check('duplicate paths are de-duplicated on start', () => {
   p.stop();
 });
 
+// 1f2) a second start() must not leave two intervals running (double send rate)
+await check('start() twice does not double the send rate', () => {
+  const app = mockApp();
+  let live = 0;
+  const realSet = global.setInterval, realClear = global.clearInterval;
+  global.setInterval = (...a) => { live++; return realSet(...a); };
+  global.clearInterval = (h) => { if (h) live--; return realClear(h); };
+  const p = makePlugin(app);
+  p.start({ ingestToken: 'k', cadence: '1m', paths: ['a.b'] });
+  p.start({ ingestToken: 'k', cadence: '1m', paths: ['a.b'] });   // no stop() between
+  assert.strictEqual(live, 1, 'exactly one interval should be running');
+  p.stop();
+  assert.strictEqual(live, 0, 'stop() clears it');
+  global.setInterval = realSet; global.clearInterval = realClear;
+});
+
 // 1g) subscription spec must not mix `period` with policy 'instant' — the server
 // warns "period assumes policy 'fixed', ignoring policy instant" and drops it.
 await check('subscribes with instant policy + minPeriod, never period', () => {
