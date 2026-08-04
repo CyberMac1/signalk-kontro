@@ -212,11 +212,12 @@ module.exports = function (app) {
     let b = buffers.get(key);
     if (!b) {
       const meta = metaFor(path);
-      b = { path, src: src || '', unit: meta.units, angular: meta.angular, samples: [], last: null };
+      b = { path, src: src || '', unit: meta.units, angular: meta.angular, samples: [], last: null, lastAt: 0 };
       buffers.set(key, b);
     }
     b.samples.push(value);
     b.last = value;
+    b.lastAt = Date.now();
   }
 
   // ── Aggregation — always all four (avg / min / max / last) ─────────────────
@@ -233,7 +234,10 @@ module.exports = function (app) {
     if (!b.samples.length) return null;
     return {
       path: b.path, src: b.src, unit: b.unit || undefined,
-      ts: Math.floor(Date.now() / 1000),
+      // When the last SAMPLE arrived, not when the window happened to flush. A
+      // sensor that reported once and then died would otherwise be stamped
+      // "now" at every flush, so Kontro could never tell it had gone quiet.
+      ts: Math.floor((b.lastAt || Date.now()) / 1000),
       avg: b.angular ? circularMean(b.samples) : mean(b.samples),
       min: Math.min(...b.samples),
       max: Math.max(...b.samples),

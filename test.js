@@ -305,6 +305,64 @@ await check('flush reports rejection', async () => {
   assert.match(app.error, /422/);
 });
 
+// 7) never POST a window that has nothing in it
+await check('no POST when Signal K supplied nothing', async () => {
+  const app = mockApp();
+  const p = makePlugin(app);
+  const { flush } = p._internals;
+  let posted = 0;
+  global.fetch = async () => { posted++; return { ok: true, json: async () => ({}) }; };
+  await flush({ useDefaultServer: true, ingestToken: 'k' });
+  assert.strictEqual(posted, 0, 'empty window must not be sent');
+  assert.match(app.status, /Waiting for data/);
+});
+
+// 8) values that mean "no reading" never become a series
+await check('null / non-numeric values are not recorded', async () => {
+  const app = mockApp();
+  const p = makePlugin(app);
+  const { record, flush } = p._internals;
+  let posted = 0;
+  global.fetch = async () => { posted++; return { ok: true, json: async () => ({}) }; };
+  // A sensor dropping out sends null; position sends an object; some send strings.
+  record('environment.wind.speedApparent', 'n2k-1', null);
+  record('environment.depth.belowTransducer', 'n2k-1', undefined);
+  record('navigation.position', 'n2k-1', { latitude: 1, longitude: 2 });
+  record('a.string', 'n2k-1', 'N/A');
+  record('a.nan', 'n2k-1', NaN);
+  record('a.bool', 'n2k-1', true);
+  assert.strictEqual(p._internals.buffers.size, 0, 'no buffers created');
+  await flush({ useDefaultServer: true, ingestToken: 'k' });
+  assert.strictEqual(posted, 0, 'nothing to send');
+});
+
+// 9) a dead sensor keeps the timestamp of its LAST sample, not the flush time
+await check('ts reflects the last sample, not the flush', async () => {
+  const app = mockApp();
+  const p = makePlugin(app);
+  const { record, aggregate } = p._internals;
+  record('x', '', 1);
+  const b = p._internals.buffers.get('x ');
+  b.lastAt = Date.now() - 10 * 60_000;      // arrived 10 minutes ago
+  const r = aggregate(b);
+  const ageSec = Math.floor(Date.now() / 1000) - r.ts;
+  assert.ok(ageSec >= 595, `ts should be ~10 min old, was ${ageSec}s`);
+});
+
+// 10) a partly-empty window sends only the series that reported
+await check('mixed window sends only live series', async () => {
+  const app = mockApp();
+  const p = makePlugin(app);
+  const { record, flush } = p._internals;
+  let body = null;
+  global.fetch = async (_u, o) => { body = JSON.parse(o.body); return { ok: true, json: async () => ({}) }; };
+  record('live.path', 'n2k-1', 5.2);
+  record('dead.path', 'n2k-1', null);
+  await flush({ useDefaultServer: true, ingestToken: 'k' });
+  assert.strictEqual(body.readings.length, 1);
+  assert.strictEqual(body.readings[0].path, 'live.path');
+});
+
 }
 
 run().then(() => {
